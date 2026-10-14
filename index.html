@@ -67,6 +67,7 @@ body {
 .gate button { font: 600 15px var(--body); color: #1a0504; background: var(--phosphor); border: 0; padding: 10px 16px; cursor: pointer; }
 .gate input:focus-visible, .gate button:focus-visible { outline: 2px solid var(--bone); outline-offset: 2px; }
 #changeKey { background: transparent; }
+.diag { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 </style>
 <script src="config.js"></script>
 </head>
@@ -93,7 +94,8 @@ body {
     <div class="controls">
       <label class="pick">Player <select id="who"></select></label>
       <div class="group" role="group" aria-label="Set list" id="stamps"></div>
-      <div class="group"><button type="button" id="sendNow">Send log now</button><button type="button" id="changeKey">Change key</button></div>
+      <div class="group"><button type="button" id="sendNow">Send log now</button></div>
+      <span class="diag" id="diag"></span>
     </div>
   </div>
 </div>
@@ -122,10 +124,11 @@ const C = {
 // ---- live data from the base (Firebase Realtime Database) --------------------
 const CFG = Object.assign({ db: '', tz: 'America/Denver' }, window.GODSEYE_CONFIG || {});
 const DB = String(CFG.db || '').trim().replace(/\/+$/, '');
-let KEY = '';
-try { KEY = localStorage.getItem('godseye-key') || ''; } catch (e) {}
+// the key comes from config.js; no typing needed
+let KEY = String(CFG.key || '').trim();
 let tree = {};                          // mirror of <key>/ in the database
 let linkState = 'idle';                 // idle | open | retry | denied
+let gotData = false;                    // the database has answered with this key's contents
 const LEVELS = ['', 'WAR', 'HIGH', 'ELEVATED', 'GUARDED', 'PEACE'];
 let BASE = { name: '---', x: 0, y: 0, z: 0, zone: 100, breach: 40 };
 let RANGE = 150;
@@ -172,7 +175,7 @@ function connect() {
   es = new EventSource(`${DB}/${encodeURIComponent(KEY)}.json`);
   es.onopen = () => { linkState = 'open'; };
   es.onerror = () => { if (linkState !== 'denied') linkState = 'retry'; };
-  es.addEventListener('put', e => { try { const m = JSON.parse(e.data); setAt(m.path, m.data); } catch (err) {} });
+  es.addEventListener('put', e => { try { const m = JSON.parse(e.data); setAt(m.path, m.data); gotData = true; } catch (err) {} });
   es.addEventListener('patch', e => {
     try { const m = JSON.parse(e.data); for (const k in m.data) setAt(String(m.path).replace(/\/$/, '') + '/' + k, m.data[k]); } catch (err) {}
   });
@@ -192,6 +195,16 @@ async function sendCmd(cmd) {
   } catch (err) { printNote('COULD NOT REACH THE BASE'); }
 }
 
+// what's wrong with the link, in plain words: [short for the screen, long for the paper]
+function linkProblem(fresh) {
+  if (!DB) return ['setup', 'NO DATABASE URL IN CONFIG.JS'];
+  if (!KEY) return ['no key', 'NO KEY IN CONFIG.JS'];
+  if (linkState === 'denied') return ['key refused', 'DATABASE REFUSED THE KEY. CHECK RULES'];
+  if (!gotData) return ['no database', "CAN'T REACH DATABASE. CHECK db IN CONFIG.JS"];
+  if (!tree.live) return ['wrong key?', 'CONNECTED, BUT NO BASE UNDER THIS KEY. CHECK THE KEY'];
+  if (!fresh) return ['base offline', 'BASE STOPPED SENDING. IS GODSEYE RUNNING?'];
+  return ['reconnecting', 'RECONNECTING...'];
+}
 // pull the latest base state into the drawing variables (once per frame)
 function readLive(now) {
   const live = tree.live || null;
@@ -681,7 +694,12 @@ function drawPrinter(now, state) {
   }
   if (!state.rows.length) {
     g.fillStyle = 'rgba(29,20,16,0.55)'; g.font = `400 16px ${F.dot}`;
-    g.fillText(state.linkOk ? 'NOBODY ON SITE' : 'NO SIGNAL FROM BASE', x + 26, y + 104);
+    if (state.linkOk) g.fillText('NOBODY ON SITE', x + 26, y + 104);
+    else {
+      const words = linkProblem(state.fresh)[1].split(' '); let line = '', ly = y + 104;
+      for (const w of words) { if ((line + ' ' + w).length > 30) { g.fillText(line, x + 26, ly); ly += 22; line = w; } else line = line ? line + ' ' + w : w; }
+      if (line) g.fillText(line, x + 26, ly);
+    }
   }
   state.rows.filter(c => c.list !== 'ignore').slice(0, 5).forEach((c, i) => {
     const ry = y + 104 + i * 50;
@@ -735,7 +753,7 @@ function drawStatusPlate(state) {
   if (view !== 'scope') return;
   const x = 30, y = 744;                       // bottom-left corner, clear of the bezel
   let head, detail = '', col = C.red;
-  if (!state.linkOk) { head = 'NO SIGNAL'; detail = !KEY ? 'enter key' : (state.fresh ? 'reconnecting' : (state.everHeard ? 'base offline' : 'waiting for base')); }
+  if (!state.linkOk) { head = 'NO SIGNAL'; detail = linkProblem(state.fresh)[0]; }
   else if (!state.detOk) { head = 'LINK LOST'; detail = 'detector'; }
   else if (state.breachWho) { head = 'BREACH'; detail = `${state.breachWho.name} ${Math.round(state.breachWho.r)}M ${state.breachWho.dir || ''}`; }
   else if (state.contact) { head = `${state.contact} CONTACT${state.contact > 1 ? 'S' : ''}`; detail = 'in zone'; col = '#ffb3a6'; }
@@ -915,9 +933,8 @@ function showGate(msg) {
     gateForm.querySelector('.row').hidden = true;
     return;
   }
-  gateMsg.textContent = msg || 'Enter your base key. It is the same firebaseKey you put in godseye.cfg.';
-  keyInput.value = KEY;
-  setTimeout(() => keyInput.focus(), 0);
+  gateMsg.textContent = msg || 'config.js is missing the key. Put the same firebaseKey from godseyeDGPU.cfg into key, then reload.';
+  gateForm.querySelector('.row').hidden = true;
 }
 gateForm.addEventListener('submit', e => {
   e.preventDefault();
@@ -925,9 +942,14 @@ gateForm.addEventListener('submit', e => {
   if (k.length < 20) { gateMsg.textContent = 'That key is too short. Base keys are at least 20 characters.'; return; }
   KEY = k;
   try { localStorage.setItem('godseye-key', k); } catch (err) {}
-  gate.hidden = true; tree = {}; connect();
+  gate.hidden = true; tree = {}; gotData = false; showDiag(); connect();
 });
-document.getElementById('changeKey').addEventListener('click', () => showGate());
+function showDiag() {
+  let host = DB; try { host = new URL(DB).host; } catch (e) {}
+  document.getElementById('diag').textContent =
+    `Database: ${host || 'not set'}   Key: ${KEY ? KEY.slice(0, 6) + '...' + KEY.slice(-4) : 'none'}`;
+}
+showDiag();
 
 makeRust();
 (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(() => requestAnimationFrame(frame));
