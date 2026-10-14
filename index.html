@@ -1,0 +1,937 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>God's Eye</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Stencil+Display:wght@700;900&family=IBM+Plex+Sans+Condensed:wght@400;600&family=VT323&family=DotGothic16&family=Covered+By+Your+Grace&display=swap">
+<style>
+/* Layout: one fixed 1280x800 console frame (the image the renderer sends to the GPU), scaled to fit; note + controls underneath. */
+:root {
+  color-scheme: dark;
+  --room: #0f0706;        /* dark booth behind the console */
+  --rust: #3a170f;
+  --plate: #2b130e;
+  --phosphor: #ff3b2a;
+  --bone: #d6c7a4;        /* masking tape / engraving */
+  --muted: #8f7566;
+  --display: "Big Shoulders Stencil Display", Impact, "Arial Narrow", sans-serif;
+  --body: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+}
+html, body { height: 100%; }
+body {
+  background: radial-gradient(90% 70% at 50% 30%, #241009 0%, var(--room) 70%);
+  color: var(--bone);
+  font-family: var(--body);
+  font-size: 15px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+/* console fills the window (largest 16:10 that fits), controls in one strip underneath */
+.wrap { height: 100%; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 10px; }
+.stage { min-height: 0; height: 100%; display: flex; align-items: center; justify-content: center; container-type: size; }
+.screen {
+  width: min(calc(100cqw - 20px), calc((100cqh - 20px) * 1.6)); height: auto; max-width: 100%; aspect-ratio: 1280 / 800; display: block;
+  box-shadow: 0 0 0 8px #070302, 0 0 0 9px #3e1a12, 0 40px 90px rgba(0,0,0,.7);
+  cursor: crosshair; touch-action: manipulation;
+}
+.under { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; justify-content: center; }
+.group button { padding: 7px 10px !important; }
+@media (max-height: 520px) { .under { display: none; } }
+.under p { margin: 0; max-width: 64ch; color: var(--muted); line-height: 1.5; min-width: 0; }
+.under p b { color: var(--bone); font-weight: 600; }
+.controls { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+.group { display: flex; gap: 6px; flex-wrap: wrap; }
+.group button {
+  font: 600 14px/1 var(--body); color: var(--bone); background: var(--plate);
+  border: 1px solid #5a2a1c; padding: 9px 12px; cursor: pointer;
+}
+.group button[aria-pressed="true"] { background: var(--phosphor); color: #1a0504; border-color: var(--phosphor); }
+.group button:focus-visible, .pick select:focus-visible { outline: 2px solid var(--bone); outline-offset: 2px; }
+.pick { display: flex; gap: 8px; align-items: center; color: var(--muted); }
+.pick select { font: 600 14px var(--body); color: var(--bone); background: var(--plate); border: 1px solid #5a2a1c; padding: 8px 10px; max-width: 60vw; }
+#sendNow { background: #6e120c; border-color: #a8141a; }
+.gate { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(8,3,2,0.86); z-index: 5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.gate form { width: min(420px, 100%); background: var(--plate); border: 1px solid #5a2a1c; padding: 28px; display: grid; gap: 14px;
+  box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+.gate h1 { margin: 0; font: 900 44px/1 var(--display); color: #c9b48e; }
+.gate p { margin: 0; color: var(--muted); line-height: 1.5; }
+.gate .row { display: flex; gap: 8px; }
+.gate input { flex: 1; min-width: 0; font: 400 16px var(--body); color: var(--bone); background: #140705; border: 1px solid #5a2a1c; padding: 10px 12px; }
+.gate button { font: 600 15px var(--body); color: #1a0504; background: var(--phosphor); border: 0; padding: 10px 16px; cursor: pointer; }
+.gate input:focus-visible, .gate button:focus-visible { outline: 2px solid var(--bone); outline-offset: 2px; }
+#changeKey { background: transparent; }
+</style>
+<script src="config.js"></script>
+</head>
+<body>
+
+<div class="gate" id="gate" hidden>
+  <form id="gateForm" autocomplete="off">
+    <h1>GOD'S EYE</h1>
+    <p id="gateMsg">Enter your base key.</p>
+    <div class="row">
+      <input id="keyInput" type="password" placeholder="Base key" aria-label="Base key" spellcheck="false">
+      <button type="submit">Connect</button>
+    </div>
+  </form>
+</div>
+
+<div class="wrap">
+  <div class="stage"><canvas class="screen" id="scr" width="1280" height="800" aria-label="God's Eye console: radar scope and arrival log"></canvas></div>
+  <div class="under">
+    <div class="controls">
+      <div class="group" role="group" aria-label="Screen" id="views"></div>
+      <div class="group" role="group" aria-label="Base level" id="lv"></div>
+    </div>
+    <div class="controls">
+      <label class="pick">Player <select id="who"></select></label>
+      <div class="group" role="group" aria-label="Set list" id="stamps"></div>
+      <div class="group"><button type="button" id="sendNow">Send log now</button><button type="button" id="changeKey">Change key</button></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+const W = 1280, H = 800;
+const cv = document.getElementById('scr');
+const g = cv.getContext('2d');
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const rnd = (a, b) => a + Math.random() * (b - a);
+const rad = d => d * Math.PI / 180;
+
+const F = {
+  stencil: '"Big Shoulders Stencil Display", Impact, "Arial Narrow", sans-serif',
+  body: '"IBM Plex Sans Condensed", "Arial Narrow", sans-serif',
+  crt: 'VT323, "Courier New", monospace',
+  dot: '"DotGothic16", "Courier New", monospace',
+  hand: '"Covered By Your Grace", "Comic Sans MS", cursive',
+};
+const C = {
+  red: '#ff3b2a', redDim: 'rgba(255,59,42,0.45)', bone: '#d6c7a4', muted: '#8f7566',
+  tape: '#cdbf98', ink: '#1d1410', paper: '#e2d6b8', face: '#0d0302',
+};
+
+// ---- live data from the base (Firebase Realtime Database) --------------------
+const CFG = Object.assign({ db: '', tz: 'America/Denver' }, window.GODSEYE_CONFIG || {});
+const DB = String(CFG.db || '').trim().replace(/\/+$/, '');
+let KEY = '';
+try { KEY = localStorage.getItem('godseye-key') || ''; } catch (e) {}
+let tree = {};                          // mirror of <key>/ in the database
+let linkState = 'idle';                 // idle | open | retry | denied
+const LEVELS = ['', 'WAR', 'HIGH', 'ELEVATED', 'GUARDED', 'PEACE'];
+let BASE = { name: '---', x: 0, y: 0, z: 0, zone: 100, breach: 40 };
+let RANGE = 150;
+let TZL = 'MT';
+let level = 4;
+let view = 'scope';
+let viewChangedAt = performance.now();
+let LOG = [];
+let lastAckT = 0;
+const overrides = {};                   // stamps sent from here, shown until the base confirms
+let levelOverride = null;               // { n, at }
+
+// Firebase turns arrays into objects sometimes; accept both
+const arr = v => Array.isArray(v) ? v.filter(Boolean)
+  : (v && typeof v === 'object' ? Object.keys(v).sort((a, b) => a - b).map(k => v[k]).filter(Boolean) : []);
+
+const listOf = (name, fallback) => {
+  const o = overrides[name];
+  if (o && performance.now() - o.at < 15000) return o.val;
+  if (fallback) return fallback;
+  const c = arr(tree.live && tree.live.contacts).find(q => q.name === name);
+  if (c) return c.list || 'unknown';
+  const e = LOG.find(q => q.who === name);
+  return e && e.list ? e.list : 'unknown';
+};
+
+function setAt(path, data) {
+  const parts = String(path || '/').split('/').filter(Boolean);
+  if (!parts.length) { tree = (data && typeof data === 'object') ? data : {}; return; }
+  let o = tree;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (!o[parts[i]] || typeof o[parts[i]] !== 'object') o[parts[i]] = {};
+    o = o[parts[i]];
+  }
+  const k = parts[parts.length - 1];
+  if (data === null) delete o[k]; else o[k] = data;
+}
+
+let es = null;
+function connect() {
+  if (!DB || !KEY) { showGate(); return; }
+  if (es) es.close();
+  linkState = 'retry';
+  es = new EventSource(`${DB}/${encodeURIComponent(KEY)}.json`);
+  es.onopen = () => { linkState = 'open'; };
+  es.onerror = () => { if (linkState !== 'denied') linkState = 'retry'; };
+  es.addEventListener('put', e => { try { const m = JSON.parse(e.data); setAt(m.path, m.data); } catch (err) {} });
+  es.addEventListener('patch', e => {
+    try { const m = JSON.parse(e.data); for (const k in m.data) setAt(String(m.path).replace(/\/$/, '') + '/' + k, m.data[k]); } catch (err) {}
+  });
+  const refused = () => { linkState = 'denied'; es.close(); showGate('The database refused that key. Check the key, and the rules from the setup guide.'); };
+  es.addEventListener('cancel', refused);
+  es.addEventListener('auth_revoked', refused);
+}
+
+async function sendCmd(cmd) {
+  if (!DB || !KEY) { printNote('NOT CONNECTED'); return; }
+  try {
+    const r = await fetch(`${DB}/${encodeURIComponent(KEY)}/commands.json`, {
+      method: 'POST',
+      body: JSON.stringify(Object.assign({ from: 'website', at: { '.sv': 'timestamp' } }, cmd)),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+  } catch (err) { printNote('COULD NOT REACH THE BASE'); }
+}
+
+// pull the latest base state into the drawing variables (once per frame)
+function readLive(now) {
+  const live = tree.live || null;
+  const age = live && live.t ? Date.now() / 1000 - live.t : Infinity;
+  const fresh = age < 90;
+  if (live && live.base) {
+    BASE = { name: String(live.base.name || '---'), x: +live.base.x || 0, y: +live.base.y || 0, z: +live.base.z || 0,
+             zone: +live.base.radius || 100, breach: +live.base.breach || 40 };
+  }
+  RANGE = (live && +live.range) || 150;
+  TZL = (live && live.tz) || 'MT';
+  if (levelOverride && (now - levelOverride.at > 10000 || (live && +live.level === levelOverride.n))) levelOverride = null;
+  const lv = levelOverride ? levelOverride.n : ((live && +live.level) || 4);
+  if (lv !== level) { level = lv; showLevel(); }
+  LOG = arr(tree.log);
+  const ack = tree.ack;
+  if (ack && ack.t && ack.t !== lastAckT) {
+    if (ack.t > Date.now() / 1000 - 20) printNote(String(ack.text || 'DONE'));
+    lastAckT = ack.t;
+  }
+  return { live, fresh, age };
+}
+let selected = null, selectedAt = 0;
+let note = null, noteAt = 0;                  // short confirmation printed on the paper
+let coverOpenAt = 0, sentAt = 0;              // guarded SEND button
+const hits = [];                              // clickable regions rebuilt each frame
+const DIR = ['N','NE','E','SE','S','SW','W','NW'];
+const dirOf = b => DIR[Math.round(((b % 360) + 360) % 360 / 45) % 8];
+const fmtDur = s => s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` : `${Math.floor(s / 3600)}h${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}m`;
+
+// ---- geometry ----------------------------------------------------------------
+const S = { cx: 410, cy: 400, R: 318, bezel: 366 };           // round scope
+const T = { x: 52, y: 58, w: 716, h: 684 };                   // log terminal
+const RC = { x: 822, w: 428 };                                // right column
+const KNOB = { x: 906, y: 198, r: 54 };
+const LEVER = { x: 866, y: 386 };
+const knobAngle = n => rad(-120 + (n - 1) * 60);
+const pos = (r, b) => { const k = S.R / RANGE; return { x: S.cx + Math.sin(rad(b)) * r * k, y: S.cy - Math.cos(rad(b)) * r * k }; };
+
+// ---- one-time textures: corroded panel, glass dust, crack ------------------------
+const rust = document.createElement('canvas'); rust.width = W; rust.height = H;
+function makeRust() {
+  const r = rust.getContext('2d');
+  r.fillStyle = '#21100b'; r.fillRect(0, 0, W, H);
+  const blot = (x, y, s, col, a) => {
+    const gr = r.createRadialGradient(x, y, 0, x, y, s);
+    gr.addColorStop(0, col.replace('A', a)); gr.addColorStop(1, col.replace('A', 0));
+    r.fillStyle = gr; r.beginPath(); r.arc(x, y, s, 0, Math.PI * 2); r.fill();
+  };
+  for (let i = 0; i < 700; i++) blot(rnd(0, W), rnd(0, H), rnd(10, 90), 'rgba(110,44,20,A)', rnd(0.04, 0.14));
+  for (let i = 0; i < 260; i++) blot(rnd(0, W), rnd(0, H), rnd(6, 40), 'rgba(150,70,30,A)', rnd(0.04, 0.12));
+  for (let i = 0; i < 300; i++) blot(rnd(0, W), rnd(0, H), rnd(10, 70), 'rgba(0,0,0,A)', rnd(0.05, 0.2));
+  // grain
+  const img = r.getImageData(0, 0, W, H), d = img.data;
+  for (let i = 0; i < d.length; i += 4) { const n = rnd(-14, 14); d[i] += n; d[i + 1] += n * 0.7; d[i + 2] += n * 0.5; }
+  r.putImageData(img, 0, 0);
+  // scratches
+  r.lineWidth = 1;
+  for (let i = 0; i < 180; i++) {
+    const x = rnd(0, W), y = rnd(0, H), a = rnd(-0.5, 0.5) + (Math.random() < 0.5 ? 0 : Math.PI / 2), l = rnd(8, 60);
+    r.strokeStyle = `rgba(214,170,140,${rnd(0.03, 0.09)})`;
+    r.beginPath(); r.moveTo(x, y); r.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); r.stroke();
+  }
+  // rust streaks running down from the top edge and bolts
+  for (let i = 0; i < 40; i++) {
+    const x = rnd(0, W), y = rnd(0, H * 0.7), l = rnd(30, 180);
+    const gr = r.createLinearGradient(x, y, x, y + l);
+    gr.addColorStop(0, 'rgba(140,58,22,0.28)'); gr.addColorStop(1, 'rgba(140,58,22,0)');
+    r.fillStyle = gr; r.fillRect(x, y, rnd(1, 4), l);
+  }
+  // welded seam between scope and right column
+  r.fillStyle = 'rgba(0,0,0,0.45)'; r.fillRect(800, 0, 6, H);
+  for (let y = 4; y < H; y += 7) { r.fillStyle = `rgba(120,80,60,${rnd(0.2, 0.45)})`; r.beginPath(); r.ellipse(803, y, 5, 3.5, 0, 0, Math.PI * 2); r.fill(); }
+}
+const dust = [];
+for (let i = 0; i < 90; i++) dust.push([rnd(0, W), rnd(0, H), rnd(0.5, 1.8), rnd(0.05, 0.18)]);
+const crack = (() => {   // one crack from the lower-left of the glass
+  const pts = [[S.cx - 250, S.cy + 200]]; let a = -0.9;
+  for (let i = 0; i < 9; i++) { a += rnd(-0.5, 0.5); const [x, y] = pts[pts.length - 1]; pts.push([x + Math.cos(a) * rnd(14, 30), y + Math.sin(a) * rnd(14, 30)]); }
+  return pts;
+})();
+
+// ---- phosphor buffer ------------------------------------------------------------
+const ph = document.createElement('canvas'); ph.width = W; ph.height = H;
+const p = ph.getContext('2d'); p.fillStyle = '#000'; p.fillRect(0, 0, W, H);
+const painted = new Map();
+function paintBlip(x, y, size, ship) {
+  p.save(); p.globalCompositeOperation = 'lighter';
+  if (ship) { p.strokeStyle = 'rgba(255,120,90,0.85)'; p.lineWidth = 2; p.strokeRect(x - size, y - size, size * 2, size * 2); }
+  else {
+    const gr = p.createRadialGradient(x, y, 0, x, y, size * 3.2);
+    gr.addColorStop(0, 'rgba(255,230,200,1)'); gr.addColorStop(0.25, 'rgba(255,80,50,0.95)'); gr.addColorStop(1, 'rgba(255,40,20,0)');
+    p.fillStyle = gr; p.beginPath(); p.arc(x, y, size * 3.2, 0, Math.PI * 2); p.fill();
+  }
+  p.restore();
+}
+
+// ---- small parts ------------------------------------------------------------------
+function bolt(x, y, s = 4) {
+  const gr = g.createRadialGradient(x - 1, y - 1, 0, x, y, s + 1);
+  gr.addColorStop(0, '#7a5040'); gr.addColorStop(1, '#1a0906');
+  g.fillStyle = gr; g.beginPath(); g.arc(x, y, s, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(x - s * 0.6, y); g.lineTo(x + s * 0.6, y); g.stroke();
+}
+// masking tape with handwriting, torn ends
+function tape(text, x, y, rot = 0, size = 19, w) {
+  g.save(); g.translate(x, y); g.rotate(rot);
+  g.font = `400 ${size}px ${F.hand}`;
+  const tw = w || g.measureText(text).width + 22, th = size + 8;
+  g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(-tw / 2 + 2, -th / 2 + 3, tw, th);
+  g.fillStyle = C.tape; g.beginPath();
+  g.moveTo(-tw / 2, -th / 2);
+  for (let i = 0; i <= 4; i++) g.lineTo(tw / 2 + (i % 2 ? -3 : 1), -th / 2 + th * i / 4);
+  for (let i = 4; i >= 0; i--) g.lineTo(-tw / 2 + (i % 2 ? 3 : -1), -th / 2 + th * i / 4);
+  g.closePath(); g.fill();
+  g.fillStyle = C.ink; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 0, 1);
+  g.restore();
+}
+// stencil text with worn paint
+function stencil(text, x, y, size, color, align = 'left', glow = 0) {
+  g.save();
+  g.font = `900 ${size}px ${F.stencil}`; g.textAlign = align; g.textBaseline = 'alphabetic';
+  if (glow) { g.shadowColor = color; g.shadowBlur = glow; }
+  g.fillStyle = color; g.fillText(text, x, y);
+  g.restore();
+}
+
+// ---- left: round scope -------------------------------------------------------------
+function drawScopeHousing() {
+  const gr = g.createRadialGradient(S.cx - 60, S.cy - 80, 40, S.cx, S.cy, S.bezel + 12);
+  gr.addColorStop(0, '#33150e'); gr.addColorStop(1, '#090302');
+  g.fillStyle = gr; g.beginPath(); g.arc(S.cx, S.cy, S.bezel, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = '#4a2116'; g.lineWidth = 3; g.stroke();
+  for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4 + 0.39; bolt(S.cx + Math.cos(a) * (S.bezel - 12), S.cy + Math.sin(a) * (S.bezel - 12), 5); }
+  g.save(); g.translate(S.cx, S.cy);
+  for (let d = 0; d < 360; d += 5) {
+    const a = rad(d), long = d % 30 === 0, mid = d % 10 === 0;
+    const r1 = S.R + 6, r2 = S.R + (long ? 19 : mid ? 13 : 9);
+    g.strokeStyle = long ? C.bone : 'rgba(214,199,164,0.45)'; g.lineWidth = long ? 2 : 1;
+    g.beginPath(); g.moveTo(Math.sin(a) * r1, -Math.cos(a) * r1); g.lineTo(Math.sin(a) * r2, -Math.cos(a) * r2); g.stroke();
+    if (long && d % 90 !== 0) {
+      g.fillStyle = C.bone; g.font = `600 14px ${F.body}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(String(d).padStart(3, '0'), Math.sin(a) * (S.R + 32), -Math.cos(a) * (S.R + 32));
+    }
+  }
+  g.restore();
+  // cardinal points on tape, slapped on by hand
+  tape('N', S.cx, S.cy - S.R - 32, -0.05, 20, 34);
+  tape('E', S.cx + S.R + 32, S.cy, 0.08, 20, 30);
+  tape('S', S.cx, S.cy + S.R + 32, 0.04, 20, 30);
+  tape('W', S.cx - S.R - 32, S.cy, -0.07, 20, 34);
+}
+
+function drawScopeFace(now) {
+  g.save();
+  g.beginPath(); g.arc(S.cx, S.cy, S.R, 0, Math.PI * 2); g.clip();
+  g.fillStyle = C.face; g.fillRect(S.cx - S.R, S.cy - S.R, S.R * 2, S.R * 2);
+  g.drawImage(ph, 0, 0);
+  const k = S.R / RANGE;
+  g.lineWidth = 1; g.strokeStyle = 'rgba(255,70,50,0.14)';
+  g.beginPath(); g.arc(S.cx, S.cy, 50 * k, 0, Math.PI * 2); g.stroke();
+  g.strokeStyle = 'rgba(255,70,50,0.34)'; g.beginPath(); g.arc(S.cx, S.cy, BASE.zone * k, 0, Math.PI * 2); g.stroke();
+  g.setLineDash([6, 6]); g.strokeStyle = 'rgba(255,70,50,0.6)';
+  g.beginPath(); g.arc(S.cx, S.cy, BASE.breach * k, 0, Math.PI * 2); g.stroke(); g.setLineDash([]);
+  g.strokeStyle = 'rgba(255,70,50,0.12)';
+  for (let d = 0; d < 360; d += 30) { const a = rad(d); g.beginPath(); g.moveTo(S.cx, S.cy); g.lineTo(S.cx + Math.sin(a) * S.R, S.cy - Math.cos(a) * S.R); g.stroke(); }
+  g.fillStyle = 'rgba(255,90,70,0.5)'; g.font = `400 18px ${F.crt}`; g.textAlign = 'left'; g.textBaseline = 'bottom';
+  g.fillText('BREACH 40', S.cx + 4, S.cy - BASE.breach * k - 2);
+  g.fillText('ZONE 100', S.cx + 4, S.cy - BASE.zone * k - 2);
+  g.fillText('150 M', S.cx + 4, S.cy - S.R + 22);
+  g.strokeStyle = C.bone; g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(S.cx - 7, S.cy); g.lineTo(S.cx + 7, S.cy); g.moveTo(S.cx, S.cy - 7); g.lineTo(S.cx, S.cy + 7); g.stroke();
+
+  // labels
+  g.textBaseline = 'middle';
+  for (const [name, m] of painted) {
+    const per = { list: listOf(name) };
+    if (per.list === 'ignore') continue;
+    const age = (now - m.at) / 1000;
+    g.globalAlpha = Math.max(0.25, 1 - age / 5);
+    const lx = m.x + 14, ly = m.y - 12;
+    g.strokeStyle = 'rgba(255,90,70,0.6)'; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(m.x + 4, m.y - 3); g.lineTo(lx - 2, ly + 4); g.stroke();
+    g.font = `400 21px ${F.crt}`;
+    const text = `${name} ${Math.round(m.r)}M`;
+    if (per.list === 'black') {
+      const w = g.measureText(text).width + 10;
+      g.fillStyle = C.red; g.fillRect(lx - 4, ly - 10, w, 20); g.fillStyle = '#1a0504'; g.fillText(text, lx + 1, ly + 1);
+    } else {
+      g.fillStyle = per.list === 'white' ? 'rgba(255,170,150,0.55)' : (level <= 2 ? '#ff6a55' : '#ffc9bd');
+      g.fillText(text, lx, ly + 1);
+    }
+    if (name === selected) {                     // selection brackets
+      const w = g.measureText(text).width + 16;
+      g.strokeStyle = '#fff1e6'; g.lineWidth = 2;
+      g.strokeRect(lx - 7, ly - 13, w, 26);
+    }
+  }
+  g.globalAlpha = 1;
+  g.restore();
+}
+
+// ---- left: log terminal ---------------------------------------------------------------
+function roundRect(x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+
+function drawTermHousing() {
+  const pad = 26;
+  const gr = g.createLinearGradient(T.x - pad, T.y - pad, T.x + T.w, T.y + T.h);
+  gr.addColorStop(0, '#33150e'); gr.addColorStop(1, '#090302');
+  g.fillStyle = gr; roundRect(T.x - pad, T.y - pad, T.w + pad * 2, T.h + pad * 2, 34); g.fill();
+  g.strokeStyle = '#4a2116'; g.lineWidth = 3; g.stroke();
+  [[T.x - 12, T.y - 12], [T.x + T.w + 12, T.y - 12], [T.x - 12, T.y + T.h + 12], [T.x + T.w + 12, T.y + T.h + 12]].forEach(([x, y]) => bolt(x, y, 5));
+  tape('ARRIVAL LOG - do not unplug', T.x + 190, T.y + T.h + 14, -0.025, 18);
+}
+
+function drawTermFace(now, t, onsite) {
+  g.save();
+  roundRect(T.x, T.y, T.w, T.h, 22); g.clip();
+  g.fillStyle = C.face; g.fillRect(T.x, T.y, T.w, T.h);
+  g.shadowColor = C.red; g.shadowBlur = 8;
+  g.textBaseline = 'alphabetic'; g.textAlign = 'left';
+
+  const x0 = T.x + 26, cols = [x0, x0 + 118, x0 + 330, x0 + 440, x0 + 548];
+  const elapsed = reduce ? 1e9 : now - viewChangedAt;
+  const clock = clockNow();
+
+  g.font = `400 34px ${F.crt}`; g.fillStyle = C.red;
+  g.fillText(`GOD'S EYE // ${BASE.name.toUpperCase()}`, x0, T.y + 46);
+  g.font = `400 26px ${F.crt}`; g.textAlign = 'right';
+  g.fillText(`${clock.time12} ${TZL}`, T.x + T.w - 26, T.y + 46);
+  g.textAlign = 'left';
+
+  const visits = LOG.length, unique = new Set(LOG.map(e => e.who)).size;
+  g.font = `400 22px ${F.crt}`; g.fillStyle = 'rgba(255,90,70,0.65)';
+  g.fillText(`${visits} VISITS   ${unique} UNIQUE   ${onsite} ON SITE   LEVEL ${level} ${LEVELS[level]}`, x0, T.y + 78);
+
+  g.fillStyle = 'rgba(255,59,42,0.25)'; g.fillRect(x0 - 8, T.y + 96, T.w - 36, 30);
+  g.fillStyle = C.red; g.font = `400 22px ${F.crt}`;
+  ['ARRIVED', 'WHO', 'LEFT', 'STAYED', 'CLOSEST'].forEach((h, i) => g.fillText(h, cols[i], T.y + 118));
+
+  const lh = 38, top = T.y + 160;
+  let lastShown = -1;
+  LOG.slice(0, 12).forEach((e, i) => {
+    if (elapsed < i * 85 + 120) return;           // prints in line by line
+    lastShown = i;
+    const y = top + i * lh;
+    const onSite = !e.left;
+    const stay = onSite
+      ? (e.arriveT ? Math.max(0, Math.floor(Date.now() / 1000 - e.arriveT)) : (+e.stay || 0))
+      : (+e.stay || 0);
+    const l = listOf(e.who, overrides[e.who] ? null : e.list);
+    const mark = l === 'black' ? '!' : l === 'white' ? '+' : l === 'ignore' ? '-' : ' ';
+    const cells = [String(e.arr || '?'), mark + e.who, onSite ? 'ON SITE' : String(e.left), fmtDur(stay), String(e.close || '-')];
+    hits.push({ x: x0 - 8, y: y - 24, w: T.w - 36, h: 34, act: () => select(e.who) });
+    if (e.who === selected) {
+      g.strokeStyle = '#fff1e6'; g.lineWidth = 2; g.strokeRect(x0 - 10, y - 24, T.w - 32, 34);
+    }
+    if (l === 'black') {
+      g.fillStyle = onSite ? C.red : 'rgba(255,59,42,0.55)'; g.fillRect(x0 - 8, y - 22, T.w - 36, 30);
+      g.fillStyle = '#1a0504';
+    } else if (l === 'ignore') {
+      g.fillStyle = 'rgba(255,70,50,0.25)';
+    } else {
+      g.fillStyle = onSite ? '#ffb3a6' : (l === 'white' ? 'rgba(255,110,90,0.45)' : 'rgba(255,70,50,0.75)');
+    }
+    g.font = `400 25px ${F.crt}`;
+    cells.forEach((c, k) => g.fillText(k === 1 ? c.slice(0, 17) : c, cols[k], y));
+  });
+  // block cursor after the last printed line
+  if (Math.floor(now / 500) % 2 === 0) {
+    const y = top + (lastShown + 1) * lh;
+    if (y < T.y + T.h - 50) { g.fillStyle = C.red; g.fillRect(x0, y - 20, 13, 24); }
+  }
+  g.font = `400 22px ${F.crt}`; g.fillStyle = 'rgba(255,90,70,0.55)';
+  g.fillText('! BLACKLIST  + WHITELIST  - IGNORED     TAP A ROW TO STAMP IT', x0, T.y + T.h - 22);
+  g.restore();
+}
+
+// ---- CRT glass over whichever screen is up ------------------------------------------------
+let rollAt = 0;
+function crtGlass(now, clipFn, bounds) {
+  g.save(); clipFn(); g.clip();
+  const { x, y, w, h, cx, cy, r } = bounds;
+  g.fillStyle = 'rgba(0,0,0,0.2)';
+  for (let yy = y; yy < y + h; yy += 3) g.fillRect(x, yy, w, 1);
+  // flicker
+  if (!reduce) { g.fillStyle = `rgba(0,0,0,${Math.random() < 0.04 ? 0.22 : rnd(0, 0.05)})`; g.fillRect(x, y, w, h); }
+  // rolling band every few seconds
+  if (!reduce) {
+    if (now > rollAt + 9000) rollAt = now + rnd(0, 4000);
+    const k = (now - rollAt) / 1800;
+    if (k > 0 && k < 1) {
+      const by = y + k * (h + 120) - 60;
+      const gr = g.createLinearGradient(0, by - 50, 0, by + 50);
+      gr.addColorStop(0, 'rgba(255,80,60,0)'); gr.addColorStop(0.5, 'rgba(255,80,60,0.07)'); gr.addColorStop(1, 'rgba(255,80,60,0)');
+      g.fillStyle = gr; g.fillRect(x, by - 50, w, 100);
+    }
+  }
+  const v = g.createRadialGradient(cx, cy, r * 0.55, cx, cy, r * 1.05);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,0.6)');
+  g.fillStyle = v; g.fillRect(x, y, w, h);
+  const rf = g.createLinearGradient(x, y, x + w * 0.6, y + h * 0.6);
+  rf.addColorStop(0, 'rgba(255,240,230,0.06)'); rf.addColorStop(0.5, 'rgba(255,240,230,0)');
+  g.fillStyle = rf; g.fillRect(x, y, w, h);
+  // dust and the crack
+  for (const [dx, dy, s, a] of dust) if (dx > x && dx < x + w && dy > y && dy < y + h) { g.fillStyle = `rgba(230,210,190,${a})`; g.fillRect(dx, dy, s, s); }
+  g.strokeStyle = 'rgba(240,225,210,0.32)'; g.lineWidth = 1;
+  g.beginPath(); crack.forEach(([cx2, cy2], i) => i ? g.lineTo(cx2, cy2) : g.moveTo(cx2, cy2)); g.stroke();
+  g.strokeStyle = 'rgba(240,225,210,0.16)';
+  g.beginPath(); g.moveTo(crack[3][0], crack[3][1]); g.lineTo(crack[3][0] + 26, crack[3][1] + 18); g.stroke();
+  g.restore();
+}
+
+// ---- right column ----------------------------------------------------------------------------
+function drawNameplate() {
+  const x = RC.x, y = 26, w = RC.w, h = 74;
+  g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(x + 3, y + 4, w, h);
+  g.fillStyle = '#2a120c'; g.fillRect(x, y, w, h);
+  g.strokeStyle = '#55261a'; g.lineWidth = 2; g.strokeRect(x + 1, y + 1, w - 2, h - 2);
+  [[x + 10, y + 10], [x + w - 10, y + 10], [x + 10, y + h - 10], [x + w - 10, y + h - 10]].forEach(([a, b]) => bolt(a, b));
+  stencil("GOD'S EYE", x + 22, y + 56, 52, '#c9b48e');
+  // paint chips knocked out of the stencil
+  g.fillStyle = '#2a120c';
+  for (let i = 0; i < 26; i++) { const px = x + 24 + ((i * 53) % 230), py = y + 20 + ((i * 29) % 38); g.fillRect(px, py, (i % 3) + 1, (i % 2) + 1); }
+  g.fillStyle = C.muted; g.font = `400 14px ${F.body}`; g.textAlign = 'right'; g.textBaseline = 'alphabetic';
+  g.fillText(`${BASE.name} post`, x + w - 22, y + 36);
+  g.fillText(`${BASE.x} ${BASE.y} ${BASE.z}`, x + w - 22, y + 56);
+}
+
+function drawKnob() {
+  for (let n = 1; n <= 5; n++) {
+    const a = knobAngle(n), lr = KNOB.r + 24;
+    const x = KNOB.x + Math.sin(a) * lr, y = KNOB.y - Math.cos(a) * lr;
+    g.fillStyle = n === level ? C.red : '#a88c74';
+    g.font = `900 20px ${F.stencil}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    if (n === level) { g.shadowColor = C.red; g.shadowBlur = 10; }
+    g.fillText(String(n), x, y); g.shadowBlur = 0;
+  }
+  const gr = g.createRadialGradient(KNOB.x - 16, KNOB.y - 18, 4, KNOB.x, KNOB.y, KNOB.r);
+  gr.addColorStop(0, '#5b4036'); gr.addColorStop(1, '#120705');
+  g.fillStyle = gr; g.beginPath(); g.arc(KNOB.x, KNOB.y, KNOB.r, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = '#2a120c'; g.lineWidth = 3; g.stroke();
+  g.strokeStyle = 'rgba(0,0,0,0.4)'; g.lineWidth = 1;
+  for (let i = 0; i < 40; i++) { const a = i * Math.PI * 2 / 40; g.beginPath(); g.moveTo(KNOB.x + Math.sin(a) * (KNOB.r - 6), KNOB.y - Math.cos(a) * (KNOB.r - 6)); g.lineTo(KNOB.x + Math.sin(a) * KNOB.r, KNOB.y - Math.cos(a) * KNOB.r); g.stroke(); }
+  g.save(); g.translate(KNOB.x, KNOB.y); g.rotate(knobAngle(level));
+  g.fillStyle = '#1a0a07'; g.fillRect(-9, -KNOB.r + 6, 18, KNOB.r * 1.55);
+  g.fillStyle = C.bone; g.fillRect(-2, -KNOB.r + 8, 4, 24);
+  g.restore();
+
+  const x0 = KNOB.x + KNOB.r + 50;
+  stencil(String(level), x0, 252, 128, level <= 2 ? C.red : '#c9b48e', 'left', level <= 2 ? 18 : 0);
+  tape(LEVELS[level], x0 + 150, 172, -0.06, 24);
+  g.fillStyle = C.muted; g.font = `400 14px ${F.body}`; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  g.fillText('base level', x0 + 110, 214);
+}
+
+function cagedLamp(x, y, on, color, label, rot) {
+  g.fillStyle = '#0a0302'; g.beginPath(); g.arc(x, y, 17, 0, Math.PI * 2); g.fill();
+  if (on) {
+    const gr = g.createRadialGradient(x - 3, y - 3, 1, x, y, 30);
+    gr.addColorStop(0, '#fff1e6'); gr.addColorStop(0.3, color); gr.addColorStop(1, 'rgba(255,40,20,0)');
+    g.fillStyle = gr; g.beginPath(); g.arc(x, y, 30, 0, Math.PI * 2); g.fill();
+  } else { g.fillStyle = '#34100b'; g.beginPath(); g.arc(x, y, 12, 0, Math.PI * 2); g.fill(); }
+  g.strokeStyle = '#5a3a30'; g.lineWidth = 2;   // wire cage
+  g.beginPath(); g.arc(x, y, 17, 0, Math.PI * 2); g.stroke();
+  [-8, 0, 8].forEach(o => { g.beginPath(); g.moveTo(x + o, y - 16); g.lineTo(x + o, y + 16); g.stroke(); });
+  tape(label, x, y + 34, rot, 16);
+}
+
+function drawLamps(now, state) {
+  const y = 300, xs = [RC.x + 34, RC.x + 136, RC.x + 250, RC.x + 380];
+  const blink = Math.floor(now / 420) % 2 === 0 || reduce;
+  const flick = state.linkOk || Math.floor(now / 900) % 2 === 0;   // link lamp blinks while it reconnects
+  cagedLamp(xs[0], y, state.linkOk || (linkState === 'retry' && flick), '#ff8a5c', 'link', -0.05);
+  cagedLamp(xs[1], y, state.radarOk, '#ff8a5c', 'radar', 0.04);
+  cagedLamp(xs[2], y, state.detOk, '#ff8a5c', 'detector', -0.03);
+  cagedLamp(xs[3], y, state.breach && blink, '#ff2a1a', 'BREACH', 0.05);
+}
+
+function drawLever() {
+  const { x, y } = LEVER;
+  g.fillStyle = '#1a0a07'; g.fillRect(x - 26, y - 34, 52, 68);
+  g.strokeStyle = '#4a2116'; g.lineWidth = 2; g.strokeRect(x - 26, y - 34, 52, 68);
+  bolt(x - 18, y - 26, 3); bolt(x + 18, y + 26, 3);
+  g.fillStyle = '#6b5048'; g.beginPath(); g.arc(x, y, 10, 0, Math.PI * 2); g.fill();
+  const up = view === 'scope';
+  g.strokeStyle = '#b8a090'; g.lineWidth = 7; g.lineCap = 'round';
+  g.beginPath(); g.moveTo(x, y); g.lineTo(x, y + (up ? -40 : 40)); g.stroke();
+  g.fillStyle = '#d8c4b0'; g.beginPath(); g.arc(x, y + (up ? -42 : 42), 8, 0, Math.PI * 2); g.fill();
+  g.lineCap = 'butt';
+  tape('SCOPE', x + 64, y - 20, -0.04, 18);
+  tape('LOG', x + 56, y + 22, 0.05, 18);
+}
+
+// guarded SEND button: first tap lifts the cover, second tap sends the report
+const SEND = { x: RC.x + 300, y: 392, r: 26 };
+function drawSend(now) {
+  const { x, y, r } = SEND;
+  const open = now - coverOpenAt < 6000;
+  const pressed = now - sentAt < 250;
+  // two small fuses kept from the old block, one dead
+  for (let i = 0; i < 2; i++) {
+    const fx = RC.x + 168, fy = y - 18 + i * 36, blown = i === 1;
+    g.fillStyle = '#7a6a60'; g.fillRect(fx, fy - 6, 6, 12); g.fillRect(fx + 34, fy - 6, 6, 12);
+    g.fillStyle = blown ? 'rgba(30,20,18,0.95)' : 'rgba(220,200,190,0.2)'; g.fillRect(fx + 6, fy - 5, 28, 10);
+    g.strokeStyle = blown ? '#000' : '#c9a890'; g.lineWidth = 1; g.beginPath(); g.moveTo(fx + 6, fy); g.lineTo(fx + 34, fy); g.stroke();
+  }
+  // base plate with hazard edge
+  g.fillStyle = '#140705'; g.fillRect(x - 44, y - 40, 88, 80);
+  g.strokeStyle = 'rgba(170,130,40,0.55)'; g.lineWidth = 4; g.setLineDash([8, 8]);
+  g.strokeRect(x - 42, y - 38, 84, 76); g.setLineDash([]);
+  // the button
+  const gr = g.createRadialGradient(x - 8, y - 8 + (pressed ? 2 : 0), 2, x, y, r);
+  gr.addColorStop(0, pressed ? '#ff9a80' : '#ff5a40'); gr.addColorStop(1, '#5a0a06');
+  g.fillStyle = '#2a0a06'; g.beginPath(); g.arc(x, y + 3, r, 0, Math.PI * 2); g.fill();
+  g.fillStyle = gr; g.beginPath(); g.arc(x, y + (pressed ? 2 : 0), r - 3, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#1a0504'; g.font = `900 17px ${F.stencil}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('SEND', x, y + (pressed ? 3 : 1));
+  // flip cover (clear plastic, scratched); hinged at the top
+  g.save();
+  if (open) { g.translate(x, y - 38); g.scale(1, -0.35); g.translate(-x, -(y - 38)); }
+  g.fillStyle = 'rgba(255,220,200,0.14)'; g.fillRect(x - 36, y - 38, 72, 72);
+  g.strokeStyle = 'rgba(255,220,200,0.45)'; g.lineWidth = 2; g.strokeRect(x - 36, y - 38, 72, 72);
+  g.strokeStyle = 'rgba(255,220,200,0.2)'; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(x - 30, y - 20); g.lineTo(x + 10, y + 26); g.moveTo(x - 5, y - 30); g.lineTo(x + 28, y); g.stroke();
+  g.restore();
+  tape(open ? 'tap again to send' : 'send log to discord', x - 6, y + 52, -0.03, 15);
+  hits.push({ x: x - 44, y: y - 40, w: 88, h: 80, act: pressSend });
+}
+function pressSend() {
+  const now = performance.now();
+  if (now - coverOpenAt >= 6000) { coverOpenAt = now; return; }   // lift the cover first
+  sentAt = now; coverOpenAt = 0;
+  printNote('SENDING REPORT...');
+  sendCmd({ type: 'send' });
+}
+function printNote(text) { note = text; noteAt = performance.now(); }
+
+function drawPrinter(now, state) {
+  const x = RC.x + 6, y = 492, w = RC.w - 12;
+  // printer slot
+  g.fillStyle = '#070202'; g.fillRect(x - 6, y - 10, w + 12, 16);
+  g.fillStyle = '#3a1a12'; g.fillRect(x - 10, y - 18, w + 20, 8);
+  // hazard stripe above the slot (worn)
+  g.save(); g.beginPath(); g.rect(x - 10, y - 30, w + 20, 10); g.clip();
+  for (let i = -2; i < 40; i++) { g.fillStyle = i % 2 ? 'rgba(20,10,6,0.9)' : 'rgba(170,130,40,0.55)'; g.beginPath(); g.moveTo(x - 10 + i * 14, y - 30); g.lineTo(x + 4 + i * 14, y - 30); g.lineTo(x - 6 + i * 14, y - 20); g.lineTo(x - 20 + i * 14, y - 20); g.fill(); }
+  g.restore();
+  // paper (continuous feed), slightly skewed, running off the bottom
+  g.save();
+  g.translate(x + w / 2, y); g.rotate(rad(0.8)); g.translate(-(x + w / 2), -y);
+  const ph2 = H - y + 20;
+  g.fillStyle = 'rgba(0,0,0,0.4)'; g.fillRect(x + 6, y + 4, w - 4, ph2);
+  g.fillStyle = C.paper; g.fillRect(x, y, w - 4, ph2);
+  for (let by = y + 26; by < y + ph2; by += 56) { g.fillStyle = 'rgba(200,120,100,0.13)'; g.fillRect(x + 22, by, w - 48, 28); }
+  // tractor holes
+  g.fillStyle = '#1a0a07';
+  for (let hy = y + 10; hy < y + ph2; hy += 20) { g.beginPath(); g.arc(x + 10, hy, 3.5, 0, Math.PI * 2); g.fill(); g.beginPath(); g.arc(x + w - 14, hy, 3.5, 0, Math.PI * 2); g.fill(); }
+  // grime toward the slot
+  const gr = g.createLinearGradient(0, y, 0, y + 40); gr.addColorStop(0, 'rgba(40,15,8,0.55)'); gr.addColorStop(1, 'rgba(40,15,8,0)');
+  g.fillStyle = gr; g.fillRect(x, y, w - 4, 40);
+
+  const clock = clockNow();
+  g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  const sel = selected && now - selectedAt < 20000 ? selected : null;
+  if (sel) {
+    // stamp tray: pick what happens to the selected person
+    g.fillStyle = 'rgba(29,20,16,0.85)'; g.font = `400 15px ${F.dot}`;
+    g.fillText(`STAMP ${sel.toUpperCase()}:`, x + 26, y + 30);
+    const opts = [['CLEARED', '#2f6b3a', 'white'], ['DENIED', '#a8141a', 'black'], ['IGNORE', '#5a4a40', 'ignore'], ['RESET', '#7a4320', 'unknown']];
+    opts.forEach(([label, col, val], i) => {
+      const sx = x + 66 + i * 94, sy = y + 56;
+      const on = listOf(sel) === val;
+      rubberStamp(label, sx, sy, col, rad(i % 2 ? 2 : -2), on ? 1 : 0.55);
+      hits.push({ x: sx - 46, y: sy - 18, w: 92, h: 36, act: () => stampPerson(sel, val, label) });
+    });
+  } else if (note && now - noteAt < 5000) {
+    g.fillStyle = 'rgba(29,20,16,0.9)'; g.font = `400 18px ${F.dot}`;
+    g.fillText(note, x + 26, y + 44);
+    g.fillStyle = 'rgba(29,20,16,0.55)'; g.font = `400 14px ${F.dot}`;
+    g.fillText('tap a name to stamp it', x + 26, y + 66);
+  } else {
+    g.fillStyle = 'rgba(29,20,16,0.85)'; g.font = `400 17px ${F.dot}`;
+    g.fillText(`ON SITE ${clock.date} ${clock.time}`, x + 26, y + 44);
+    g.fillStyle = 'rgba(29,20,16,0.55)'; g.font = `400 14px ${F.dot}`;
+    g.fillText('tap a name to stamp it', x + 26, y + 66);
+  }
+  if (!state.rows.length) {
+    g.fillStyle = 'rgba(29,20,16,0.55)'; g.font = `400 16px ${F.dot}`;
+    g.fillText(state.linkOk ? 'NOBODY ON SITE' : 'NO SIGNAL FROM BASE', x + 26, y + 104);
+  }
+  state.rows.filter(c => c.list !== 'ignore').slice(0, 5).forEach((c, i) => {
+    const ry = y + 104 + i * 50;
+    const l = c.list;
+    if (c.name === sel) { g.fillStyle = 'rgba(168,20,26,0.14)'; g.fillRect(x + 18, ry - 20, w - 40, 46); }
+    g.fillStyle = 'rgba(29,20,16,0.88)'; g.font = `400 18px ${F.dot}`;
+    g.fillText((c.name === sel ? '> ' : '') + c.name, x + 26, ry);
+    g.fillStyle = 'rgba(29,20,16,0.6)'; g.font = `400 15px ${F.dot}`;
+    g.fillText(`${Math.round(c.r)}M ${c.dir || ''}${c.closing ? ' CLOSING' : ''}`, x + 26, ry + 20);
+    const s = l === 'black' ? ['DENIED', '#a8141a'] : l === 'white' ? ['CLEARED', '#2f6b3a'] : level <= 2 ? ['HOSTILE', '#a8141a'] : ['UNVERIFIED', '#7a4320'];
+    rubberStamp(s[0], x + w - 100, ry + 2, s[1], rad(((i * 37) % 11) - 5));
+    hits.push({ x: x + 18, y: ry - 22, w: w - 40, h: 48, act: () => select(c.name) });
+  });
+  g.restore();
+}
+
+function select(name) {
+  selected = selected === name ? null : name;
+  selectedAt = performance.now();
+  syncPicker();
+}
+function syncPicker() {
+  const s = document.getElementById('who');
+  if (s && selected) s.value = selected;
+}
+const LIST_WORD = { white: 'WHITELISTED', black: 'BLACKLISTED', ignore: 'IGNORED', unknown: 'RESET' };
+function stampPerson(name, val, label) {
+  if (!name) return;
+  overrides[name] = { val, at: performance.now() };
+  printNote(`SENDING: ${name.toUpperCase()} ${LIST_WORD[val]}`);
+  sendCmd({ type: 'list', name, val });
+  selected = null;
+  syncPicker();
+}
+
+function rubberStamp(text, x, y, color, rot, alpha = 0.8) {
+  g.save(); g.translate(x, y); g.rotate(rot);
+  g.font = `900 20px ${F.stencil}`;
+  const tw = g.measureText(text).width + 16;
+  g.globalAlpha = alpha;
+  g.strokeStyle = color; g.lineWidth = 2.5; g.strokeRect(-tw / 2, -14, tw, 28);
+  g.fillStyle = color; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 0, 1);
+  // uneven ink: knock out specks
+  g.globalCompositeOperation = 'destination-out'; g.globalAlpha = 0.5;
+  for (let i = 0; i < 14; i++) { const k = (i * 7919) % 97; g.fillRect(-tw / 2 + (k * 3) % tw, -12 + (k * 5) % 24, 2, 2); }
+  g.restore();
+}
+
+// ---- status line along the bottom of the left area --------------------------------------------
+function drawStatusPlate(state) {
+  if (view !== 'scope') return;
+  const x = 30, y = 744;                       // bottom-left corner, clear of the bezel
+  let head, detail = '', col = C.red;
+  if (!state.linkOk) { head = 'NO SIGNAL'; detail = !KEY ? 'enter key' : (state.fresh ? 'reconnecting' : (state.everHeard ? 'base offline' : 'waiting for base')); }
+  else if (!state.detOk) { head = 'LINK LOST'; detail = 'detector'; }
+  else if (state.breachWho) { head = 'BREACH'; detail = `${state.breachWho.name} ${Math.round(state.breachWho.r)}M ${state.breachWho.dir || ''}`; }
+  else if (state.contact) { head = `${state.contact} CONTACT${state.contact > 1 ? 'S' : ''}`; detail = 'in zone'; col = '#ffb3a6'; }
+  else { head = 'SECURE'; col = 'rgba(255,90,70,0.6)'; }
+  g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  g.shadowColor = C.red; g.shadowBlur = 10; g.fillStyle = col;
+  g.font = `400 34px ${F.crt}`; g.fillText(head, x, y);
+  g.font = `400 22px ${F.crt}`; g.fillText(detail.toUpperCase().slice(0, 19), x, y + 24);
+  g.shadowBlur = 0;
+  g.textAlign = 'right'; g.fillStyle = 'rgba(255,90,70,0.6)'; g.font = `400 22px ${F.crt}`;
+  g.fillText(`SHIPS ${state.ships}   ${clockNow().time12} ${TZL}`, 790, y);
+}
+
+// ---- clock -----------------------------------------------------------------------------------
+function clockNow() {
+  const d = new Date();
+  try {
+    return {
+      time: d.toLocaleTimeString('en-GB', { timeZone: CFG.tz, hour12: false }),
+      time12: d.toLocaleTimeString('en-US', { timeZone: CFG.tz, hour: 'numeric', minute: '2-digit', second: '2-digit' }),
+      date: d.toLocaleDateString('en-GB', { timeZone: CFG.tz, day: '2-digit', month: '2-digit' }).replace(/\//g, '.'),
+    };
+  } catch { const s = d.toTimeString().slice(0, 8); return { time: s, time12: s, date: '' }; }
+}
+
+// ---- loop --------------------------------------------------------------------------------------
+let last = performance.now(), sweep = 0, everHeard = false;
+const T0 = performance.now();
+
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  const t = (now - T0) / 1000 + 30;
+  const prev = sweep;
+  sweep = reduce ? sweep : (sweep + dt * 90) % 360;
+
+  // phosphor decay + sweep
+  p.globalCompositeOperation = 'source-over';
+  p.fillStyle = `rgba(0,0,0,${1 - Math.pow(0.5, dt / 1.1)})`; p.fillRect(0, 0, W, H);
+  const a0 = rad(prev - 90), a1 = rad(sweep - 90);
+  p.save(); p.globalCompositeOperation = 'lighter';
+  p.fillStyle = 'rgba(255,60,40,0.2)';
+  p.beginPath(); p.moveTo(S.cx, S.cy); p.arc(S.cx, S.cy, S.R, a0, a1 < a0 ? a1 + Math.PI * 2 : a1); p.closePath(); p.fill();
+  p.strokeStyle = 'rgba(255,150,120,0.9)'; p.lineWidth = 2;
+  p.beginPath(); p.moveTo(S.cx, S.cy); p.lineTo(S.cx + Math.cos(a1) * S.R, S.cy + Math.sin(a1) * S.R); p.stroke();
+  for (let i = 0; i < 3; i++) { const q = pos(Math.random() ** 2 * 26, prev + Math.random() * ((sweep - prev + 360) % 360)); p.fillStyle = 'rgba(255,70,40,0.35)'; p.fillRect(q.x, q.y, 2, 2); }
+  p.restore();
+  const crossed = b => { const span = (sweep - prev + 360) % 360; const d = (((b - prev) % 360) + 360) % 360; return d <= span; };
+
+  const { live, fresh } = readLive(now);
+  if (live) everHeard = true;
+  const rows = []; let breachWho = null, contact = 0;
+  hits.length = 0;
+  const seenNow = new Set();
+  for (const c of (fresh ? arr(live.contacts) : [])) {
+    if (!c.name) continue;
+    const l = listOf(c.name, overrides[c.name] ? null : (c.list || 'unknown'));
+    const hasPos = typeof c.x === 'number' && typeof c.z === 'number';
+    let r = +c.dist || 0, b = 0;
+    if (hasPos) { const dx = c.x - BASE.x, dz = c.z - BASE.z; r = Math.hypot(dx, dz); b = ((Math.atan2(dx, -dz) * 180 / Math.PI) + 360) % 360; }
+    seenNow.add(c.name);
+    const q = pos(Math.min(r, RANGE - 2), b);
+    if (l === 'ignore' || !hasPos) { painted.delete(c.name); }
+    else if (crossed(b) || reduce || !painted.has(c.name)) { paintBlip(q.x, q.y, l === 'white' ? 3 : 4, false); painted.set(c.name, { x: q.x, y: q.y, r, b, at: now }); }
+    const dir = hasPos ? dirOf(b) : (c.dir || '');
+    rows.push({ name: c.name, list: l, r, b, dir, closing: !!c.closing });
+    if (l !== 'white' && l !== 'ignore') {
+      if (r <= BASE.breach && (!breachWho || r < breachWho.r)) breachWho = { name: c.name, r, dir };
+      else if (r <= BASE.zone) contact++;
+    }
+  }
+  for (const name of [...painted.keys()]) if (!seenNow.has(name)) painted.delete(name);
+  rows.sort((a, b) => a.r - b.r);
+  let shipsIn = 0;
+  for (const sh of (fresh ? arr(live.ships) : [])) {
+    if (typeof sh.x !== 'number' || typeof sh.z !== 'number') continue;
+    const dx = sh.x - BASE.x, dz = sh.z - BASE.z, r = Math.hypot(dx, dz);
+    const b = ((Math.atan2(dx, -dz) * 180 / Math.PI) + 360) % 360;
+    if (r > RANGE) continue;
+    shipsIn++;
+    const q = pos(r, b);
+    if (crossed(b) || reduce) paintBlip(q.x, q.y, 4, true);
+  }
+  const linkOk = fresh && linkState === 'open';
+  const state = { rows, breach: linkOk && !!breachWho, breachWho, contact, ships: shipsIn, fresh, everHeard,
+                  linkOk, radarOk: linkOk && !!(live.link && live.link.radar),
+                  detOk: linkOk && !(live.link && live.link.detector === false) };
+  refreshPicker(rows, now);
+
+  g.drawImage(rust, 0, 0);
+  if (view === 'scope') {
+    drawScopeHousing(); drawScopeFace(now);
+    crtGlass(now, () => { g.beginPath(); g.arc(S.cx, S.cy, S.R, 0, Math.PI * 2); },
+             { x: S.cx - S.R, y: S.cy - S.R, w: S.R * 2, h: S.R * 2, cx: S.cx, cy: S.cy, r: S.R });
+  } else {
+    drawTermHousing(); drawTermFace(now, t, rows.length);
+    crtGlass(now, () => roundRect(T.x, T.y, T.w, T.h, 22),
+             { x: T.x, y: T.y, w: T.w, h: T.h, cx: T.x + T.w / 2, cy: T.y + T.h / 2, r: T.w * 0.62 });
+  }
+  drawNameplate(); drawKnob(); drawLamps(now, state); drawLever(); drawSend(now); drawPrinter(now, state);
+  drawStatusPlate(state);
+  requestAnimationFrame(frame);
+}
+
+// ---- controls ------------------------------------------------------------------------------------
+const lvBox = document.getElementById('lv'), vBox = document.getElementById('views');
+function showLevel() { [...lvBox.children].forEach((b, i) => b.setAttribute('aria-pressed', String(i + 1 === level))); }
+function chooseLevel(n) {
+  if (n === level) return;
+  levelOverride = { n, at: performance.now() }; level = n; showLevel();
+  printNote(`SENDING: LEVEL ${n} ${LEVELS[n]}`);
+  sendCmd({ type: 'level', n });
+}
+function setView(v) { if (v !== view) viewChangedAt = performance.now(); view = v; [...vBox.children].forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === v))); }
+for (let n = 1; n <= 5; n++) {
+  const b = document.createElement('button'); b.type = 'button'; b.id = 'lvl' + n;
+  b.textContent = `${n} ${LEVELS[n][0]}${LEVELS[n].slice(1).toLowerCase()}`;
+  b.addEventListener('click', () => chooseLevel(n)); lvBox.appendChild(b);
+}
+[['scope', 'Radar'], ['log', 'Log']].forEach(([v, label]) => {
+  const b = document.createElement('button'); b.type = 'button'; b.id = 'view-' + v; b.dataset.v = v; b.textContent = label;
+  b.addEventListener('click', () => setView(v)); vBox.appendChild(b);
+});
+showLevel(); setView(location.hash === '#log' ? 'log' : 'scope');
+
+// backup controls: pick a player, stamp them, force-send
+const whoSel = document.getElementById('who');
+let pickerSig = '', pickerAt = 0;
+function refreshPicker(rows, now) {
+  if (now - pickerAt < 1000) return;
+  pickerAt = now;
+  const names = [...new Set([...rows.map(r => r.name), ...LOG.map(e => e.who)])].filter(Boolean).sort((a, b) => a.localeCompare(b));
+  const sig = names.join('|');
+  if (sig === pickerSig) return;
+  pickerSig = sig;
+  const keep = whoSel.value;
+  whoSel.textContent = '';
+  if (!names.length) { const o = document.createElement('option'); o.value = ''; o.textContent = 'nobody yet'; whoSel.appendChild(o); }
+  names.forEach(n => { const o = document.createElement('option'); o.value = n; o.textContent = n; whoSel.appendChild(o); });
+  if (names.includes(keep)) whoSel.value = keep;
+}
+whoSel.addEventListener('change', () => { selected = whoSel.value; selectedAt = performance.now(); });
+const stampBox = document.getElementById('stamps');
+[['white', 'Whitelist', 'CLEARED'], ['black', 'Blacklist', 'DENIED'], ['ignore', 'Ignore', 'IGNORE'], ['unknown', 'Reset', 'RESET']].forEach(([val, label, st]) => {
+  const b = document.createElement('button'); b.type = 'button'; b.id = 'set-' + val; b.textContent = label;
+  b.addEventListener('click', () => stampPerson(whoSel.value, val, st)); stampBox.appendChild(b);
+});
+document.getElementById('sendNow').addEventListener('click', () => { coverOpenAt = performance.now(); pressSend(); });
+
+cv.addEventListener('click', e => {
+  const r = cv.getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width * W, y = (e.clientY - r.top) / r.height * H;
+  if (Math.abs(x - LEVER.x) < 34 && Math.abs(y - LEVER.y) < 56) { setView(view === 'scope' ? 'log' : 'scope'); return; }
+  for (let i = hits.length - 1; i >= 0; i--) {
+    const h = hits[i];
+    if (x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h) { h.act(); return; }
+  }
+  // tap a name on the scope
+  for (const [name, m] of painted) {
+    if (Math.abs(x - (m.x + 60)) < 75 && Math.abs(y - (m.y - 12)) < 16 && view === 'scope') { select(name); return; }
+  }
+  let best = 0, bd = 1e9;
+  for (let n = 1; n <= 5; n++) {
+    const a = knobAngle(n), d = Math.hypot(x - (KNOB.x + Math.sin(a) * (KNOB.r + 24)), y - (KNOB.y - Math.cos(a) * (KNOB.r + 24)));
+    if (d < bd) { bd = d; best = n; }
+  }
+  if (bd < 32) { chooseLevel(best); return; }
+  if (Math.hypot(x - KNOB.x, y - KNOB.y) < KNOB.r) chooseLevel(level % 5 + 1);
+});
+
+// ---- key gate ------------------------------------------------------------------------------------
+const gate = document.getElementById('gate'), gateMsg = document.getElementById('gateMsg');
+const keyInput = document.getElementById('keyInput'), gateForm = document.getElementById('gateForm');
+function showGate(msg) {
+  gate.hidden = false;
+  if (!DB) {
+    gateMsg.textContent = 'This site is not set up yet. Put your Firebase database URL in config.js, then reload.';
+    gateForm.querySelector('.row').hidden = true;
+    return;
+  }
+  gateMsg.textContent = msg || 'Enter your base key. It is the same firebaseKey you put in godseye.cfg.';
+  keyInput.value = KEY;
+  setTimeout(() => keyInput.focus(), 0);
+}
+gateForm.addEventListener('submit', e => {
+  e.preventDefault();
+  const k = keyInput.value.trim();
+  if (k.length < 20) { gateMsg.textContent = 'That key is too short. Base keys are at least 20 characters.'; return; }
+  KEY = k;
+  try { localStorage.setItem('godseye-key', k); } catch (err) {}
+  gate.hidden = true; tree = {}; connect();
+});
+document.getElementById('changeKey').addEventListener('click', () => showGate());
+
+makeRust();
+(document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(() => requestAnimationFrame(frame));
+connect();
+})();
+</script>
+</body>
+</html>
