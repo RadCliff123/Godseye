@@ -94,7 +94,7 @@ body {
     <div class="controls">
       <label class="pick">Player <select id="who"></select></label>
       <div class="group" role="group" aria-label="Set list" id="stamps"></div>
-      <div class="group"><button type="button" id="sendNow">Send log now</button></div>
+      <div class="group"><button type="button" id="sendNow">Send log now</button><button type="button" id="resendArt">Resend screen art</button></div>
       <span class="diag" id="diag"></span>
     </div>
   </div>
@@ -104,7 +104,8 @@ body {
 (() => {
 const W = 1280, H = 800;
 const cv = document.getElementById('scr');
-const g = cv.getContext('2d');
+let g = cv.getContext('2d');           // swapped to an offscreen canvas while rendering screen art
+let artMode = false;
 const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const rnd = (a, b) => a + Math.random() * (b - a);
 const rad = d => d * Math.PI / 180;
@@ -359,11 +360,11 @@ function drawScopeHousing() {
   tape('W', S.cx - S.R - 32, S.cy, -0.07, 20, 34);
 }
 
-function drawScopeFace(now) {
+function drawScopeFace(now, staticOnly) {
   g.save();
   g.beginPath(); g.arc(S.cx, S.cy, S.R, 0, Math.PI * 2); g.clip();
   g.fillStyle = C.face; g.fillRect(S.cx - S.R, S.cy - S.R, S.R * 2, S.R * 2);
-  g.drawImage(ph, 0, 0);
+  if (!staticOnly) g.drawImage(ph, 0, 0);
   const k = S.R / RANGE;
   g.lineWidth = 1; g.strokeStyle = 'rgba(255,70,50,0.14)';
   g.beginPath(); g.arc(S.cx, S.cy, 50 * k, 0, Math.PI * 2); g.stroke();
@@ -373,12 +374,13 @@ function drawScopeFace(now) {
   g.strokeStyle = 'rgba(255,70,50,0.12)';
   for (let d = 0; d < 360; d += 30) { const a = rad(d); g.beginPath(); g.moveTo(S.cx, S.cy); g.lineTo(S.cx + Math.sin(a) * S.R, S.cy - Math.cos(a) * S.R); g.stroke(); }
   g.fillStyle = 'rgba(255,90,70,0.5)'; g.font = `400 18px ${F.crt}`; g.textAlign = 'left'; g.textBaseline = 'bottom';
-  g.fillText('BREACH 40', S.cx + 4, S.cy - BASE.breach * k - 2);
-  g.fillText('ZONE 100', S.cx + 4, S.cy - BASE.zone * k - 2);
-  g.fillText('150 M', S.cx + 4, S.cy - S.R + 22);
+  g.fillText(`BREACH ${BASE.breach}`, S.cx + 4, S.cy - BASE.breach * k - 2);
+  g.fillText(`ZONE ${BASE.zone}`, S.cx + 4, S.cy - BASE.zone * k - 2);
+  g.fillText(`${RANGE} M`, S.cx + 4, S.cy - S.R + 22);
   g.strokeStyle = C.bone; g.lineWidth = 1.5;
   g.beginPath(); g.moveTo(S.cx - 7, S.cy); g.lineTo(S.cx + 7, S.cy); g.moveTo(S.cx, S.cy - 7); g.lineTo(S.cx, S.cy + 7); g.stroke();
 
+  if (staticOnly) { g.restore(); return; }
   // labels
   g.textBaseline = 'middle';
   for (const [name, m] of painted) {
@@ -486,15 +488,15 @@ function drawTermFace(now, t, onsite) {
 
 // ---- CRT glass over whichever screen is up ------------------------------------------------
 let rollAt = 0;
-function crtGlass(now, clipFn, bounds) {
+function crtGlass(now, clipFn, bounds, still) {
   g.save(); clipFn(); g.clip();
   const { x, y, w, h, cx, cy, r } = bounds;
   g.fillStyle = 'rgba(0,0,0,0.2)';
   for (let yy = y; yy < y + h; yy += 3) g.fillRect(x, yy, w, 1);
   // flicker
-  if (!reduce) { g.fillStyle = `rgba(0,0,0,${Math.random() < 0.04 ? 0.22 : rnd(0, 0.05)})`; g.fillRect(x, y, w, h); }
+  if (!reduce && !still) { g.fillStyle = `rgba(0,0,0,${Math.random() < 0.04 ? 0.22 : rnd(0, 0.05)})`; g.fillRect(x, y, w, h); }
   // rolling band every few seconds
-  if (!reduce) {
+  if (!reduce && !still) {
     if (now > rollAt + 9000) rollAt = now + rnd(0, 4000);
     const k = (now - rollAt) / 1800;
     if (k > 0 && k < 1) {
@@ -659,13 +661,14 @@ function drawPrinter(now, state) {
   const ph2 = H - y + 20;
   g.fillStyle = 'rgba(0,0,0,0.4)'; g.fillRect(x + 6, y + 4, w - 4, ph2);
   g.fillStyle = C.paper; g.fillRect(x, y, w - 4, ph2);
-  for (let by = y + 26; by < y + ph2; by += 56) { g.fillStyle = 'rgba(200,120,100,0.13)'; g.fillRect(x + 22, by, w - 48, 28); }
+  if (!artMode) for (let by = y + 26; by < y + ph2; by += 56) { g.fillStyle = 'rgba(200,120,100,0.13)'; g.fillRect(x + 22, by, w - 48, 28); }
   // tractor holes
   g.fillStyle = '#1a0a07';
   for (let hy = y + 10; hy < y + ph2; hy += 20) { g.beginPath(); g.arc(x + 10, hy, 3.5, 0, Math.PI * 2); g.fill(); g.beginPath(); g.arc(x + w - 14, hy, 3.5, 0, Math.PI * 2); g.fill(); }
   // grime toward the slot
   const gr = g.createLinearGradient(0, y, 0, y + 40); gr.addColorStop(0, 'rgba(40,15,8,0.55)'); gr.addColorStop(1, 'rgba(40,15,8,0)');
   g.fillStyle = gr; g.fillRect(x, y, w - 4, 40);
+  if (artMode) { g.restore(); return; }   // art: blank paper, the base prints on it
 
   const clock = clockNow();
   g.textAlign = 'left'; g.textBaseline = 'alphabetic';
@@ -922,6 +925,104 @@ cv.addEventListener('click', e => {
   if (bd < 32) { chooseLevel(best); return; }
   if (Math.hypot(x - KNOB.x, y - KNOB.y) < KNOB.r) chooseLevel(level % 5 + 1);
 });
+
+// ---- screen art for the in-game DirectGPU monitor -------------------------------------------------
+// The browser draws the static parts of the console (with the real fonts), cuts out the pieces that
+// change, and uploads them to Firebase under <key>/art. godseyeDGPU.lua downloads them from there.
+// Regions are in 1280x800 console coordinates; the Lua side uses the same numbers.
+const ART_VERSION = 1;
+const ART = {
+  LVL: [822, 110, 428, 172],              // dial + big numeral + level tape, one image per level
+  LAMP_Y: 266, LAMP_W: 68,                 // each lamp lit, cut around its centre
+  LAMP_X: [RC.x + 34, RC.x + 136, RC.x + 250, RC.x + 380],
+  SEND: [1036, 350, 160, 112],             // SEND button with the cover lifted, plus its tape label
+  STAMP: [120, 40],                        // rubber stamps on plain paper
+};
+const artTag = () => `v${ART_VERSION}|${BASE.zone}|${BASE.breach}|${RANGE}`;
+
+function renderArt() {
+  const off = document.createElement('canvas'); off.width = W; off.height = H;
+  const saved = { g, view, level, coverOpenAt, sentAt, linkState, selected, note };
+  const out = {};
+  const jpg = (c, q) => c.toDataURL('image/jpeg', q).split(',')[1];
+  const crop = (x, y, w, h) => {
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    c.getContext('2d').drawImage(off, x, y, w, h, 0, 0, w, h);
+    return jpg(c, 0.86);
+  };
+  const lampsOff = { linkOk: false, radarOk: false, detOk: false, breach: false };
+  const lampsOn = { linkOk: true, radarOk: true, detOk: true, breach: true };
+  const scene = (v, lv, lamps, coverOpen) => {
+    const t = performance.now();
+    view = v; level = lv; linkState = 'idle'; selected = null; note = null;
+    coverOpenAt = coverOpen ? t : -1e9; sentAt = -1e9;
+    g = off.getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.shadowBlur = 0;
+    g.drawImage(rust, 0, 0);
+    if (v === 'scope') {
+      drawScopeHousing(); drawScopeFace(0, true);
+      crtGlass(0, () => { g.beginPath(); g.arc(S.cx, S.cy, S.R, 0, Math.PI * 2); },
+               { x: S.cx - S.R, y: S.cy - S.R, w: S.R * 2, h: S.R * 2, cx: S.cx, cy: S.cy, r: S.R }, true);
+    } else {
+      drawTermHousing();
+      g.save(); roundRect(T.x, T.y, T.w, T.h, 22); g.clip(); g.fillStyle = C.face; g.fillRect(T.x, T.y, T.w, T.h); g.restore();
+      crtGlass(0, () => roundRect(T.x, T.y, T.w, T.h, 22),
+               { x: T.x, y: T.y, w: T.w, h: T.h, cx: T.x + T.w / 2, cy: T.y + T.h / 2, r: T.w * 0.62 }, true);
+    }
+    drawNameplate(); drawKnob(); drawLamps(0, lamps); drawLever(); drawSend(t); drawPrinter(t, { rows: [] });
+  };
+  artMode = true;
+  try {
+    const small = document.createElement('canvas'); small.width = 960; small.height = 600;
+    const sg = small.getContext('2d');
+    scene('scope', 4, lampsOff, false); sg.drawImage(off, 0, 0, 960, 600); out.bg_scope = jpg(small, 0.8);
+    scene('log', 4, lampsOff, false);   sg.drawImage(off, 0, 0, 960, 600); out.bg_log = jpg(small, 0.8);
+    for (let n = 1; n <= 5; n++) { scene('scope', n, lampsOff, false); out['lvl' + n] = crop(...ART.LVL); }
+    scene('scope', 4, lampsOn, false);
+    ART.LAMP_X.forEach((lx, i) => { out['lamp' + i] = crop(lx - ART.LAMP_W / 2, ART.LAMP_Y, ART.LAMP_W, ART.LAMP_W); });
+    scene('scope', 4, lampsOff, true); out.send_open = crop(...ART.SEND);
+    const [sw, sh] = ART.STAMP;
+    [['st_denied', 'DENIED', '#a8141a'], ['st_cleared', 'CLEARED', '#2f6b3a'], ['st_hostile', 'HOSTILE', '#a8141a'],
+     ['st_unverified', 'UNVERIFIED', '#7a4320'], ['st_ignore', 'IGNORE', '#5a4a40'], ['st_reset', 'RESET', '#7a4320']]
+      .forEach(([name, text, col], i) => {
+        const c = document.createElement('canvas'); c.width = sw; c.height = sh;
+        g = c.getContext('2d');
+        g.fillStyle = C.paper; g.fillRect(0, 0, sw, sh);
+        rubberStamp(text, sw / 2, sh / 2, col, rad(i % 2 ? 2 : -2), 0.85);
+        out[name] = jpg(c, 0.9);
+      });
+  } finally {
+    artMode = false;
+    ({ g, view, level, coverOpenAt, sentAt, linkState, selected, note } = saved);
+  }
+  return out;
+}
+
+let artBusy = false;
+async function syncArt(force) {
+  if (artBusy || !DB || !KEY || !tree.live) return;
+  const base = `${DB}/${encodeURIComponent(KEY)}/art`;
+  try {
+    if (!force) {
+      const have = await (await fetch(`${base}/version.json`)).json();
+      if (have === artTag()) return;
+    }
+    artBusy = true;
+    printNote('SENDING SCREEN ART TO BASE');
+    const assets = renderArt();
+    for (const [name, data] of Object.entries(assets)) {
+      const r = await fetch(`${base}/${name}.json`, { method: 'PUT', body: JSON.stringify(data) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+    }
+    await fetch(`${base}/version.json`, { method: 'PUT', body: JSON.stringify(artTag()) });
+    printNote('SCREEN ART SENT TO BASE');
+  } catch (err) {
+    printNote('COULD NOT SEND SCREEN ART');
+  } finally { artBusy = false; }
+}
+// check once the base's settings are known, then whenever they could have changed
+setInterval(() => { if (tree.live && document.fonts && document.fonts.status === 'loaded') syncArt(false); }, 15000);
+document.getElementById('resendArt').addEventListener('click', () => syncArt(true));
 
 // ---- key gate ------------------------------------------------------------------------------------
 const gate = document.getElementById('gate'), gateMsg = document.getElementById('gateMsg');
